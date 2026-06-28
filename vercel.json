@@ -1,0 +1,11 @@
+{
+  "installCommand": "cd primavera-sabor && npm ci",
+  "buildCommand": "cd primavera-sabor && npm run build",
+  "outputDirectory": "primavera-sabor/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
