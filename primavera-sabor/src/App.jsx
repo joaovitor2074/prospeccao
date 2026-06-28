@@ -852,7 +852,7 @@ function AdminPanel({ employee, onLogout }) {
                   </span>
                   <span>
                     <ShoppingBag size={16} aria-hidden="true" />
-                    {request.itemCount} item{request.itemCount === 1 ? '' : 's'}
+                    {request.itemCount} {request.itemCount === 1 ? 'item' : 'itens'}
                   </span>
                 </div>
 
@@ -916,12 +916,16 @@ function CustomerMenu() {
   const [note, setNote] = useState('')
   const [waiterRequested, setWaiterRequested] = useState(false)
   const [lastWaiterRequest, setLastWaiterRequest] = useState(null)
+  const [cartOpen, setCartOpen] = useState(false)
+  const [recentlyAddedId, setRecentlyAddedId] = useState('')
+  const [addNotice, setAddNotice] = useState('')
 
   const now = new Date()
   const day = now.getDay()
   const isOperatingDay = day >= 1 && day <= 6
   const isOpen = isOperatingDay && now.getHours() >= 18 && now.getHours() < 23
   const formattedTable = formatTable(table)
+  const activeCategoryData = menu.find((category) => category.id === activeCategory) ?? menu[0]
 
   const visibleProducts = useMemo(() => {
     const query = searchTerm.trim().toLocaleLowerCase('pt-BR')
@@ -945,6 +949,17 @@ function CustomerMenu() {
   const hasPricedItems = cart.some((item) => item.price != null)
   const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0)
 
+  useEffect(() => {
+    if (!recentlyAddedId && !addNotice) return undefined
+
+    const timeoutId = window.setTimeout(() => {
+      setRecentlyAddedId('')
+      setAddNotice('')
+    }, 1400)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [addNotice, recentlyAddedId])
+
   const addToCart = (product) => {
     setCart((currentCart) => {
       const existingItem = currentCart.find((item) => item.id === product.id)
@@ -957,6 +972,9 @@ function CustomerMenu() {
 
       return [...currentCart, { ...product, quantity: 1 }]
     })
+    setRecentlyAddedId(product.id)
+    setAddNotice(`${product.name} entrou ${isDineIn ? 'no resumo' : 'no carrinho'}.`)
+    setCartOpen(true)
   }
 
   const updateQuantity = (productId, nextQuantity) => {
@@ -1187,36 +1205,64 @@ function CustomerMenu() {
               ))}
             </div>
 
-            <div className="product-grid">
-              {visibleProducts.map((product) => (
-                <article className="product-card" key={product.id}>
-                  <div className="product-photo">
-                    <img
-                      src={heroImage}
-                      alt=""
-                      aria-hidden="true"
-                      style={{ objectPosition: product.position }}
-                    />
-                    <span style={{ backgroundColor: product.categoryColor }}>
-                      {product.categoryName}
-                    </span>
-                  </div>
+            <div
+              className="menu-context"
+              style={{ '--category-color': activeCategoryData.color }}
+            >
+              <div>
+                <span>{searchTerm ? 'Busca no cardápio' : activeCategoryData.name}</span>
+                <p>
+                  {searchTerm
+                    ? `Resultados para "${searchTerm.trim()}"`
+                    : activeCategoryData.description}
+                </p>
+              </div>
+              <strong>
+                {visibleProducts.length} {visibleProducts.length === 1 ? 'item' : 'itens'}
+              </strong>
+            </div>
 
-                  <div className="product-info">
-                    <div>
-                      <h3>{product.name}</h3>
-                      <p>{product.description}</p>
+            <div className="product-grid">
+              {visibleProducts.map((product) => {
+                const isRecentlyAdded = recentlyAddedId === product.id
+
+                return (
+                  <article
+                    className={`product-card ${isRecentlyAdded ? 'just-added' : ''}`}
+                    key={product.id}
+                  >
+                    <div className="product-photo">
+                      <img
+                        src={heroImage}
+                        alt=""
+                        aria-hidden="true"
+                        style={{ objectPosition: product.position }}
+                      />
+                      <span style={{ backgroundColor: product.categoryColor }}>
+                        {product.categoryName}
+                      </span>
                     </div>
-                    <div className="product-footer">
-                      <strong>{formatProductPrice(product)}</strong>
-                      <button type="button" onClick={() => addToCart(product)}>
-                        <Plus size={18} aria-hidden="true" />
-                        Adicionar
-                      </button>
+
+                    <div className="product-info">
+                      <div>
+                        <h3>{product.name}</h3>
+                        <p>{product.description}</p>
+                      </div>
+                      <div className="product-footer">
+                        <strong>{formatProductPrice(product)}</strong>
+                        <button
+                          className={isRecentlyAdded ? 'added' : ''}
+                          type="button"
+                          onClick={() => addToCart(product)}
+                        >
+                          <Plus size={18} aria-hidden="true" />
+                          {isRecentlyAdded ? 'Adicionado' : 'Adicionar'}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                </article>
-              ))}
+                  </article>
+                )
+              })}
             </div>
 
             {!visibleProducts.length ? (
@@ -1227,16 +1273,38 @@ function CustomerMenu() {
             ) : null}
           </div>
 
-          <aside className="cart-panel" aria-label="Carrinho">
+          <button
+            className={`cart-backdrop ${cartOpen ? 'visible' : ''}`}
+            type="button"
+            onClick={() => setCartOpen(false)}
+            aria-label={isDineIn ? 'Fechar resumo da mesa' : 'Fechar carrinho'}
+          />
+
+          <aside
+            id="cart-panel"
+            className={`cart-panel ${cartOpen ? 'open' : ''}`}
+            aria-label={isDineIn ? 'Resumo da mesa' : 'Carrinho'}
+          >
             <div className="cart-header">
               <div>
                 <span className="eyebrow">{isDineIn ? 'Resumo' : 'Carrinho'}</span>
                 <h2>{isDineIn ? 'Para o garçom' : 'Seu pedido'}</h2>
               </div>
-              <span className="cart-count">
-                <ShoppingBag size={17} aria-hidden="true" />
-                {itemCount}
-              </span>
+              <div className="cart-header-actions">
+                <span className="cart-count">
+                  <ShoppingBag size={17} aria-hidden="true" />
+                  {itemCount}
+                </span>
+                <button
+                  className="cart-close"
+                  type="button"
+                  onClick={() => setCartOpen(false)}
+                  aria-label={isDineIn ? 'Fechar resumo da mesa' : 'Fechar carrinho'}
+                  title="Fechar"
+                >
+                  <X size={18} aria-hidden="true" />
+                </button>
+              </div>
             </div>
 
             <div className="cart-items">
@@ -1341,6 +1409,34 @@ function CustomerMenu() {
             ) : null}
           </aside>
         </section>
+
+        {addNotice ? (
+          <div className="add-toast" role="status">
+            <ShoppingBag size={18} aria-hidden="true" />
+            {addNotice}
+          </div>
+        ) : null}
+
+        <button
+          className={`floating-cart ${cartOpen ? 'open' : ''} ${itemCount ? 'has-items' : ''}`}
+          type="button"
+          onClick={() => setCartOpen(true)}
+          aria-controls="cart-panel"
+          aria-expanded={cartOpen}
+        >
+          <span className="floating-cart-icon">
+            <ShoppingBag size={20} aria-hidden="true" />
+            {itemCount ? <em>{itemCount}</em> : null}
+          </span>
+          <span>{isDineIn ? 'Resumo da mesa' : 'Carrinho'}</span>
+          <strong>
+            {itemCount
+              ? `${itemCount} ${itemCount === 1 ? 'item' : 'itens'}`
+              : isDineIn
+                ? 'Abrir resumo'
+                : 'Abrir'}
+          </strong>
+        </button>
       </main>
     </div>
   )
