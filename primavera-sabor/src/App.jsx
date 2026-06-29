@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell,
   Camera,
+  Check,
   ChevronRight,
   Clock3,
+  CreditCard,
+  LogOut,
   MapPin,
   MessageCircle,
   Minus,
@@ -20,6 +23,34 @@ import './App.css'
 const WHATSAPP_NUMBER = '5599984360319'
 const SERVICE_REQUESTS_KEY = 'primavera-sabor-service-requests'
 const ADMIN_SESSION_KEY = 'primavera-sabor-admin-session'
+const ADMIN_SOUND_KEY = 'primavera-sabor-admin-sound'
+
+const EVENT_TYPES = {
+  WAITER_CALL: 'WAITER_CALL',
+  ORDER_CREATED: 'ORDER_CREATED',
+  PAYMENT_REQUESTED: 'PAYMENT_REQUESTED',
+}
+
+const EVENT_TYPE_META = {
+  [EVENT_TYPES.WAITER_CALL]: {
+    label: 'Chamada de garçom',
+    tone: 'service',
+  },
+  [EVENT_TYPES.ORDER_CREATED]: {
+    label: 'Pedido da mesa',
+    tone: 'order',
+  },
+  [EVENT_TYPES.PAYMENT_REQUESTED]: {
+    label: 'Conta solicitada',
+    tone: 'payment',
+  },
+}
+
+const STATUS_LABELS = {
+  pending: 'Pendente',
+  in_progress: 'Em atendimento',
+  done: 'Concluído',
+}
 
 const demoEmployees = [
   {
@@ -527,8 +558,65 @@ function formatLineTotal(item) {
   return item.price == null ? 'valor a confirmar' : currency.format(item.price * item.quantity)
 }
 
+function getEventTypeMeta(type) {
+  return EVENT_TYPE_META[type] ?? EVENT_TYPE_META[EVENT_TYPES.WAITER_CALL]
+}
+
+function buildEventMessage(type, table, itemCount) {
+  const tableLabel = table || 'não informada'
+
+  if (type === EVENT_TYPES.ORDER_CREATED) {
+    return `Mesa ${tableLabel} enviou ${itemCount} ${itemCount === 1 ? 'item' : 'itens'} para atendimento`
+  }
+
+  if (type === EVENT_TYPES.PAYMENT_REQUESTED) {
+    return `Mesa ${tableLabel} pediu fechamento da conta`
+  }
+
+  return `Mesa ${tableLabel} chamou o garçom`
+}
+
 function buildWhatsAppUrl(message) {
   return `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`
+}
+
+function readSoundPreference() {
+  if (typeof window === 'undefined') return true
+
+  const savedPreference = window.localStorage.getItem(ADMIN_SOUND_KEY)
+  return savedPreference === null ? true : savedPreference === 'true'
+}
+
+function writeSoundPreference(enabled) {
+  if (typeof window === 'undefined') return
+
+  window.localStorage.setItem(ADMIN_SOUND_KEY, String(enabled))
+}
+
+function playAdminAlert() {
+  if (typeof window === 'undefined') return
+
+  const AudioContext = window.AudioContext || window.webkitAudioContext
+  if (!AudioContext) return
+
+  const context = new AudioContext()
+  const now = context.currentTime
+  const oscillator = context.createOscillator()
+  const gain = context.createGain()
+
+  oscillator.type = 'sine'
+  oscillator.frequency.setValueAtTime(880, now)
+  oscillator.frequency.exponentialRampToValueAtTime(1180, now + 0.28)
+  gain.gain.setValueAtTime(0.0001, now)
+  gain.gain.exponentialRampToValueAtTime(0.18, now + 0.03)
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.42)
+
+  oscillator.connect(gain)
+  gain.connect(context.destination)
+  void context.resume?.()
+  oscillator.start(now)
+  oscillator.stop(now + 0.44)
+  window.setTimeout(() => void context.close(), 560)
 }
 
 function readServiceRequests() {
@@ -542,20 +630,29 @@ function readServiceRequests() {
 
     return parsedRequests.map((request) => {
       const items = Array.isArray(request.items) ? request.items : []
+      const itemCount =
+        typeof request.itemCount === 'number'
+          ? request.itemCount
+          : items.reduce((sum, item) => sum + (item.quantity || 0), 0)
+      const table = request.table || 'não informada'
+      const type = Object.values(EVENT_TYPES).includes(request.type)
+        ? request.type
+        : itemCount > 0
+          ? EVENT_TYPES.ORDER_CREATED
+          : EVENT_TYPES.WAITER_CALL
 
       return {
         id: request.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        table: request.table || 'não informada',
+        type,
+        table,
+        message: request.message || buildEventMessage(type, table, itemCount),
         status: ['pending', 'in_progress', 'done'].includes(request.status)
           ? request.status
           : 'pending',
         createdAt: request.createdAt || new Date().toISOString(),
         updatedAt: request.updatedAt || null,
         note: request.note || '',
-        itemCount:
-          typeof request.itemCount === 'number'
-            ? request.itemCount
-            : items.reduce((sum, item) => sum + (item.quantity || 0), 0),
+        itemCount,
         total: request.total || 'A confirmar',
         items,
       }
@@ -700,9 +797,23 @@ function AdminLogin({ onLogin }) {
 function AdminPanel({ employee, onLogout }) {
   const [requests, setRequests] = useState(readServiceRequests)
   const [filter, setFilter] = useState('open')
+  const [soundEnabled, setSoundEnabled] = useState(readSoundPreference)
+  const knownRequestIdsRef = useRef(new Set(requests.map((request) => request.id)))
 
   useEffect(() => {
-    const syncRequests = () => setRequests(readServiceRequests())
+    const syncRequests = () => {
+      const nextRequests = readServiceRequests()
+      const hasNewPendingRequest = nextRequests.some(
+        (request) => request.status === 'pending' && !knownRequestIdsRef.current.has(request.id),
+      )
+
+      knownRequestIdsRef.current = new Set(nextRequests.map((request) => request.id))
+      setRequests(nextRequests)
+
+      if (soundEnabled && hasNewPendingRequest) {
+        playAdminAlert()
+      }
+    }
 
     window.addEventListener('storage', syncRequests)
     window.addEventListener('service-requests-updated', syncRequests)
@@ -713,7 +824,20 @@ function AdminPanel({ employee, onLogout }) {
       window.removeEventListener('service-requests-updated', syncRequests)
       window.clearInterval(intervalId)
     }
-  }, [])
+  }, [soundEnabled])
+
+  const toggleSound = () => {
+    setSoundEnabled((currentValue) => {
+      const nextValue = !currentValue
+      writeSoundPreference(nextValue)
+
+      if (nextValue) {
+        playAdminAlert()
+      }
+
+      return nextValue
+    })
+  }
 
   const updateRequestStatus = (requestId, status) => {
     const nextRequests = readServiceRequests().map((request) =>
@@ -739,7 +863,7 @@ function AdminPanel({ employee, onLogout }) {
   const pendingCount = requests.filter((request) => request.status === 'pending').length
   const progressCount = requests.filter((request) => request.status === 'in_progress').length
   const doneCount = requests.filter((request) => request.status === 'done').length
-  const withItemsCount = requests.filter((request) => request.items.length > 0).length
+  const orderCount = requests.filter((request) => request.type === EVENT_TYPES.ORDER_CREATED).length
 
   const filteredRequests = requests.filter((request) => {
     if (filter === 'all') return true
@@ -761,14 +885,25 @@ function AdminPanel({ employee, onLogout }) {
         </a>
 
         <div className="admin-user-actions">
+          <button
+            className={`action-button subtle sound-toggle ${soundEnabled ? 'active' : ''}`}
+            type="button"
+            onClick={toggleSound}
+            aria-pressed={soundEnabled}
+          >
+            <Bell size={18} aria-hidden="true" />
+            {soundEnabled ? 'Som ligado' : 'Som mudo'}
+          </button>
           <div className="admin-user">
             <span>{employee?.role || 'Funcionário'}</span>
             <strong>{employee?.name || 'Equipe'}</strong>
           </div>
           <a className="action-button subtle" href="/?mesa=04">
+            <MapPin size={18} aria-hidden="true" />
             Ver mesa 04
           </a>
           <button className="action-button subtle" type="button" onClick={onLogout}>
+            <LogOut size={18} aria-hidden="true" />
             Sair
           </button>
         </div>
@@ -779,9 +914,15 @@ function AdminPanel({ employee, onLogout }) {
           <div>
             <span className="eyebrow">Painel interno</span>
             <h1>Atendimento das mesas</h1>
-            <p>Veja quem chamou o garçom, quais mesas montaram resumo de pedido e o que já foi atendido.</p>
+            <p>Fila das chamadas, pedidos de mesa e solicitações de conta para a equipe resolver sem perder ritmo.</p>
           </div>
-          <button className="action-button subtle" type="button" onClick={clearCompleted}>
+          <button
+            className="action-button subtle"
+            type="button"
+            onClick={clearCompleted}
+            aria-label="Limpar concluídos"
+            title="Limpar concluídos"
+          >
             <Trash2 size={18} aria-hidden="true" />
             Limpar concluídos
           </button>
@@ -797,8 +938,8 @@ function AdminPanel({ employee, onLogout }) {
             <strong>{progressCount}</strong>
           </div>
           <div>
-            <span>Com itens</span>
-            <strong>{withItemsCount}</strong>
+            <span>Pedidos</span>
+            <strong>{orderCount}</strong>
           </div>
           <div>
             <span>Concluídos</span>
@@ -827,74 +968,76 @@ function AdminPanel({ employee, onLogout }) {
 
         <section className="admin-list" aria-label="Solicitações">
           {filteredRequests.length ? (
-            filteredRequests.map((request) => (
-              <article className={`admin-card ${request.status}`} key={request.id}>
-                <div className="admin-card-head">
-                  <div>
-                    <span className="admin-table">Mesa {request.table}</span>
-                    <strong>
-                      {request.items.length ? 'Chamou garçom com resumo' : 'Chamou garçom sem pedido'}
-                    </strong>
+            filteredRequests.map((request) => {
+              const eventMeta = getEventTypeMeta(request.type)
+
+              return (
+                <article className={`admin-card ${request.status}`} key={request.id}>
+                  <div className="admin-card-head">
+                    <div>
+                      <span className="admin-table">Mesa {request.table}</span>
+                      <span className={`event-type ${eventMeta.tone}`}>{eventMeta.label}</span>
+                      <strong>{request.message}</strong>
+                    </div>
+                    <span className="admin-status">{STATUS_LABELS[request.status]}</span>
                   </div>
-                  <span className="admin-status">
-                    {request.status === 'pending'
-                      ? 'Pendente'
-                      : request.status === 'in_progress'
-                        ? 'Em atendimento'
-                        : 'Concluído'}
-                  </span>
-                </div>
 
-                <div className="admin-meta-row">
-                  <span>
-                    <Clock3 size={16} aria-hidden="true" />
-                    {formatRequestTime(request.createdAt)}
-                  </span>
-                  <span>
-                    <ShoppingBag size={16} aria-hidden="true" />
-                    {request.itemCount} {request.itemCount === 1 ? 'item' : 'itens'}
-                  </span>
-                </div>
-
-                {request.items.length ? (
-                  <div className="admin-items">
-                    {request.items.map((item) => (
-                      <div key={`${request.id}-${item.id}`}>
-                        <span>
-                          {item.quantity}x {item.name}
-                        </span>
-                        <small>{item.lineTotal}</small>
-                      </div>
-                    ))}
+                  <div className="admin-meta-row">
+                    <span>
+                      <Clock3 size={16} aria-hidden="true" />
+                      {formatRequestTime(request.createdAt)}
+                    </span>
+                    <span>
+                      <ShoppingBag size={16} aria-hidden="true" />
+                      {request.itemCount} {request.itemCount === 1 ? 'item' : 'itens'}
+                    </span>
                   </div>
-                ) : (
-                  <p className="admin-empty-note">A mesa pediu apenas atendimento.</p>
-                )}
 
-                <div className="admin-note">
-                  <span>Observação</span>
-                  <p>{request.note || 'Sem observação.'}</p>
-                </div>
+                  {request.items.length ? (
+                    <div className="admin-items">
+                      {request.items.map((item) => (
+                        <div key={`${request.id}-${item.id}`}>
+                          <span>
+                            {item.quantity}x {item.name}
+                          </span>
+                          <small>{item.lineTotal}</small>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="admin-empty-note">
+                      {request.type === EVENT_TYPES.PAYMENT_REQUESTED
+                        ? 'A mesa pediu fechamento da conta.'
+                        : 'A mesa pediu apenas atendimento.'}
+                    </p>
+                  )}
 
-                <div className="admin-card-actions">
-                  {request.status === 'pending' ? (
-                    <button type="button" onClick={() => updateRequestStatus(request.id, 'in_progress')}>
-                      <Bell size={16} aria-hidden="true" />
-                      Atender
+                  <div className="admin-note">
+                    <span>Observação</span>
+                    <p>{request.note || 'Sem observação.'}</p>
+                  </div>
+
+                  <div className="admin-card-actions">
+                    {request.status === 'pending' ? (
+                      <button type="button" onClick={() => updateRequestStatus(request.id, 'in_progress')}>
+                        <Bell size={16} aria-hidden="true" />
+                        Atender
+                      </button>
+                    ) : null}
+                    {request.status !== 'done' ? (
+                      <button type="button" onClick={() => updateRequestStatus(request.id, 'done')}>
+                        <Check size={16} aria-hidden="true" />
+                        Concluir
+                      </button>
+                    ) : null}
+                    <button className="danger" type="button" onClick={() => removeRequest(request.id)}>
+                      <Trash2 size={16} aria-hidden="true" />
+                      Remover
                     </button>
-                  ) : null}
-                  {request.status !== 'done' ? (
-                    <button type="button" onClick={() => updateRequestStatus(request.id, 'done')}>
-                      Concluir
-                    </button>
-                  ) : null}
-                  <button className="danger" type="button" onClick={() => removeRequest(request.id)}>
-                    <Trash2 size={16} aria-hidden="true" />
-                    Remover
-                  </button>
-                </div>
-              </article>
-            ))
+                  </div>
+                </article>
+              )
+            })
           ) : (
             <div className="admin-empty">
               <Bell size={28} aria-hidden="true" />
@@ -1000,29 +1143,46 @@ function CustomerMenu() {
     return `Olá! Pedido ${serviceLabel} - Primavera Sabor:\n\n${items}\n\nTotal: ${totalText}\n\nObservação:\n${noteText}`
   }, [cart, cartTotal, formattedTable, hasPricedItems, isDineIn, note])
 
-  const handleWaiterCall = () => {
+  const pushServiceEvent = (request) => {
+    writeServiceRequests([request, ...readServiceRequests()])
+    setWaiterRequested(true)
+    setLastWaiterRequest(request)
+    setAddNotice(`Solicitação enviada para a mesa ${request.table}.`)
+  }
+
+  const createServiceEvent = (type) => {
     const nowIso = new Date().toISOString()
-    const request = {
+    const tableLabel = formattedTable || 'não informada'
+    const items = cart.map((item) => ({
+      id: item.id,
+      name: item.name,
+      quantity: item.quantity,
+      categoryName: item.categoryName,
+      lineTotal: formatLineTotal(item),
+    }))
+    const eventItemCount = items.reduce((sum, item) => sum + item.quantity, 0)
+
+    return {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      table: formattedTable || 'não informada',
+      type,
+      table: tableLabel,
+      message: buildEventMessage(type, tableLabel, eventItemCount),
       status: 'pending',
       createdAt: nowIso,
       updatedAt: null,
       note: note.trim(),
-      itemCount,
+      itemCount: eventItemCount,
       total: hasPricedItems ? currency.format(cartTotal) : 'A confirmar',
-      items: cart.map((item) => ({
-        id: item.id,
-        name: item.name,
-        quantity: item.quantity,
-        categoryName: item.categoryName,
-        lineTotal: formatLineTotal(item),
-      })),
+      items,
     }
+  }
 
-    writeServiceRequests([request, ...readServiceRequests()])
-    setWaiterRequested(true)
-    setLastWaiterRequest(request)
+  const handleWaiterCall = () => {
+    pushServiceEvent(createServiceEvent(cart.length ? EVENT_TYPES.ORDER_CREATED : EVENT_TYPES.WAITER_CALL))
+  }
+
+  const handlePaymentRequest = () => {
+    pushServiceEvent(createServiceEvent(EVENT_TYPES.PAYMENT_REQUESTED))
   }
 
   const scrollToMenu = () => {
@@ -1376,16 +1536,22 @@ function CustomerMenu() {
             {isDineIn ? (
               <>
                 <p className="service-note">
-                  Este resumo não é enviado pelo WhatsApp. Você pode chamar o garçom com ou sem itens.
+                  A equipe recebe sua solicitação no painel interno. Envie itens, tire dúvidas ou peça a conta.
                 </p>
-                <button
-                  className="checkout-button"
-                  type="button"
-                  onClick={handleWaiterCall}
-                >
-                  <Bell size={19} aria-hidden="true" />
-                  Chamar garçom
-                </button>
+                <div className="service-actions">
+                  <button className="checkout-button" type="button" onClick={handleWaiterCall}>
+                    <Bell size={19} aria-hidden="true" />
+                    {cart.length ? 'Enviar pedido' : 'Chamar garçom'}
+                  </button>
+                  <button
+                    className="checkout-button secondary-checkout"
+                    type="button"
+                    onClick={handlePaymentRequest}
+                  >
+                    <CreditCard size={19} aria-hidden="true" />
+                    Pedir conta
+                  </button>
+                </div>
               </>
             ) : (
               <a
@@ -1404,7 +1570,7 @@ function CustomerMenu() {
             )}
             {waiterRequested && isDineIn ? (
               <p className="waiter-status">
-                Garçom solicitado para a mesa {lastWaiterRequest?.table || formattedTable || 'informada'}.
+                {lastWaiterRequest?.message || 'Solicitação enviada para a equipe.'}
               </p>
             ) : null}
           </aside>
