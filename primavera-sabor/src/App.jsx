@@ -52,6 +52,22 @@ const STATUS_LABELS = {
   done: 'Concluído',
 }
 
+const PAYMENT_TIMING = {
+  AFTER: 'after',
+  BEFORE: 'before',
+}
+
+const PAYMENT_TIMING_META = {
+  [PAYMENT_TIMING.AFTER]: {
+    label: 'Pagar depois',
+    description: 'Na conta da mesa',
+  },
+  [PAYMENT_TIMING.BEFORE]: {
+    label: 'Pagar antes',
+    description: 'Acertar este pedido agora',
+  },
+}
+
 const demoEmployees = [
   {
     username: 'garcom',
@@ -562,6 +578,38 @@ function getEventTypeMeta(type) {
   return EVENT_TYPE_META[type] ?? EVENT_TYPE_META[EVENT_TYPES.WAITER_CALL]
 }
 
+function getPaymentTimingMeta(value) {
+  return PAYMENT_TIMING_META[value] ?? PAYMENT_TIMING_META[PAYMENT_TIMING.AFTER]
+}
+
+function getRequestPaymentLabel(request) {
+  if (request.type === EVENT_TYPES.PAYMENT_REQUESTED) return 'Fechar conta agora'
+  if (request.type !== EVENT_TYPES.ORDER_CREATED) return ''
+
+  return `${getPaymentTimingMeta(request.paymentTiming).label} - ${request.total || 'A confirmar'}`
+}
+
+function getRequestStartLabel(type) {
+  if (type === EVENT_TYPES.PAYMENT_REQUESTED) return 'Atender conta'
+  if (type === EVENT_TYPES.ORDER_CREATED) return 'Atender pedido'
+
+  return 'Atender chamado'
+}
+
+function getRequestCompletionLabel(type) {
+  if (type === EVENT_TYPES.PAYMENT_REQUESTED) return 'Fechar conta'
+  if (type === EVENT_TYPES.ORDER_CREATED) return 'Fechar pedido'
+
+  return 'Concluir chamado'
+}
+
+function getRequestEmptyNote(type) {
+  if (type === EVENT_TYPES.PAYMENT_REQUESTED) return 'A mesa pediu fechamento da conta.'
+  if (type === EVENT_TYPES.ORDER_CREATED) return 'Pedido sem itens informados.'
+
+  return 'A mesa pediu apenas atendimento.'
+}
+
 function buildEventMessage(type, table, itemCount) {
   const tableLabel = table || 'não informada'
 
@@ -629,17 +677,22 @@ function readServiceRequests() {
     if (!Array.isArray(parsedRequests)) return []
 
     return parsedRequests.map((request) => {
-      const items = Array.isArray(request.items) ? request.items : []
-      const itemCount =
+      const savedItems = Array.isArray(request.items) ? request.items : []
+      const savedItemCount =
         typeof request.itemCount === 'number'
           ? request.itemCount
-          : items.reduce((sum, item) => sum + (item.quantity || 0), 0)
+          : savedItems.reduce((sum, item) => sum + (item.quantity || 0), 0)
       const table = request.table || 'não informada'
       const type = Object.values(EVENT_TYPES).includes(request.type)
         ? request.type
-        : itemCount > 0
+        : savedItemCount > 0
           ? EVENT_TYPES.ORDER_CREATED
           : EVENT_TYPES.WAITER_CALL
+      const items = type === EVENT_TYPES.ORDER_CREATED ? savedItems : []
+      const itemCount = type === EVENT_TYPES.ORDER_CREATED ? savedItemCount : 0
+      const paymentTiming = Object.values(PAYMENT_TIMING).includes(request.paymentTiming)
+        ? request.paymentTiming
+        : PAYMENT_TIMING.AFTER
 
       return {
         id: request.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -653,7 +706,8 @@ function readServiceRequests() {
         updatedAt: request.updatedAt || null,
         note: request.note || '',
         itemCount,
-        total: request.total || 'A confirmar',
+        total: type === EVENT_TYPES.ORDER_CREATED ? request.total || 'A confirmar' : 'A confirmar',
+        paymentTiming,
         items,
       }
     })
@@ -797,6 +851,7 @@ function AdminLogin({ onLogin }) {
 function AdminPanel({ employee, onLogout }) {
   const [requests, setRequests] = useState(readServiceRequests)
   const [filter, setFilter] = useState('open')
+  const [typeFilter, setTypeFilter] = useState('all')
   const [soundEnabled, setSoundEnabled] = useState(readSoundPreference)
   const knownRequestIdsRef = useRef(new Set(requests.map((request) => request.id)))
 
@@ -864,11 +919,18 @@ function AdminPanel({ employee, onLogout }) {
   const progressCount = requests.filter((request) => request.status === 'in_progress').length
   const doneCount = requests.filter((request) => request.status === 'done').length
   const orderCount = requests.filter((request) => request.type === EVENT_TYPES.ORDER_CREATED).length
+  const paymentCount = requests.filter((request) => request.type === EVENT_TYPES.PAYMENT_REQUESTED).length
 
   const filteredRequests = requests.filter((request) => {
-    if (filter === 'all') return true
-    if (filter === 'open') return request.status !== 'done'
-    return request.status === filter
+    const matchesStatus =
+      filter === 'all' || (filter === 'open' ? request.status !== 'done' : request.status === filter)
+    const matchesType =
+      typeFilter === 'all' ||
+      (typeFilter === 'orders' && request.type === EVENT_TYPES.ORDER_CREATED) ||
+      (typeFilter === 'payments' && request.type === EVENT_TYPES.PAYMENT_REQUESTED) ||
+      (typeFilter === 'service' && request.type === EVENT_TYPES.WAITER_CALL)
+
+    return matchesStatus && matchesType
   })
 
   return (
@@ -942,37 +1004,68 @@ function AdminPanel({ employee, onLogout }) {
             <strong>{orderCount}</strong>
           </div>
           <div>
+            <span>Contas</span>
+            <strong>{paymentCount}</strong>
+          </div>
+          <div>
             <span>Concluídos</span>
             <strong>{doneCount}</strong>
           </div>
         </section>
 
-        <section className="admin-filters" aria-label="Filtros">
-          {[
-            ['open', 'Abertos'],
-            ['pending', 'Pendentes'],
-            ['in_progress', 'Em atendimento'],
-            ['done', 'Concluídos'],
-            ['all', 'Todos'],
-          ].map(([value, label]) => (
-            <button
-              className={filter === value ? 'active' : ''}
-              type="button"
-              key={value}
-              onClick={() => setFilter(value)}
-            >
-              {label}
-            </button>
-          ))}
+        <section className="admin-filter-groups" aria-label="Filtros do painel">
+          <div className="admin-filter-group">
+            <span className="admin-filter-label">Tipo</span>
+            <div className="admin-filters" aria-label="Tipo de solicitação">
+              {[
+                ['all', 'Todos'],
+                ['orders', 'Pedidos'],
+                ['payments', 'Contas'],
+                ['service', 'Chamados'],
+              ].map(([value, label]) => (
+                <button
+                  className={typeFilter === value ? 'active' : ''}
+                  type="button"
+                  key={value}
+                  onClick={() => setTypeFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="admin-filter-group">
+            <span className="admin-filter-label">Andamento</span>
+            <div className="admin-filters" aria-label="Status da solicitação">
+              {[
+                ['open', 'Abertos'],
+                ['pending', 'Pendentes'],
+                ['in_progress', 'Em atendimento'],
+                ['done', 'Concluídos'],
+                ['all', 'Todos'],
+              ].map(([value, label]) => (
+                <button
+                  className={filter === value ? 'active' : ''}
+                  type="button"
+                  key={value}
+                  onClick={() => setFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         </section>
 
         <section className="admin-list" aria-label="Solicitações">
           {filteredRequests.length ? (
             filteredRequests.map((request) => {
               const eventMeta = getEventTypeMeta(request.type)
+              const paymentLabel = getRequestPaymentLabel(request)
 
               return (
-                <article className={`admin-card ${request.status}`} key={request.id}>
+                <article className={`admin-card ${eventMeta.tone} ${request.status}`} key={request.id}>
                   <div className="admin-card-head">
                     <div>
                       <span className="admin-table">Mesa {request.table}</span>
@@ -987,13 +1080,21 @@ function AdminPanel({ employee, onLogout }) {
                       <Clock3 size={16} aria-hidden="true" />
                       {formatRequestTime(request.createdAt)}
                     </span>
-                    <span>
-                      <ShoppingBag size={16} aria-hidden="true" />
-                      {request.itemCount} {request.itemCount === 1 ? 'item' : 'itens'}
-                    </span>
+                    {request.type === EVENT_TYPES.ORDER_CREATED ? (
+                      <span>
+                        <ShoppingBag size={16} aria-hidden="true" />
+                        {request.itemCount} {request.itemCount === 1 ? 'item' : 'itens'}
+                      </span>
+                    ) : null}
+                    {paymentLabel ? (
+                      <span>
+                        <CreditCard size={16} aria-hidden="true" />
+                        {paymentLabel}
+                      </span>
+                    ) : null}
                   </div>
 
-                  {request.items.length ? (
+                  {request.type === EVENT_TYPES.ORDER_CREATED && request.items.length ? (
                     <div className="admin-items">
                       {request.items.map((item) => (
                         <div key={`${request.id}-${item.id}`}>
@@ -1005,11 +1106,7 @@ function AdminPanel({ employee, onLogout }) {
                       ))}
                     </div>
                   ) : (
-                    <p className="admin-empty-note">
-                      {request.type === EVENT_TYPES.PAYMENT_REQUESTED
-                        ? 'A mesa pediu fechamento da conta.'
-                        : 'A mesa pediu apenas atendimento.'}
-                    </p>
+                    <p className="admin-empty-note">{getRequestEmptyNote(request.type)}</p>
                   )}
 
                   <div className="admin-note">
@@ -1019,15 +1116,26 @@ function AdminPanel({ employee, onLogout }) {
 
                   <div className="admin-card-actions">
                     {request.status === 'pending' ? (
-                      <button type="button" onClick={() => updateRequestStatus(request.id, 'in_progress')}>
+                      <button
+                        className="start-action"
+                        type="button"
+                        onClick={() => updateRequestStatus(request.id, 'in_progress')}
+                      >
                         <Bell size={16} aria-hidden="true" />
-                        Atender
+                        {getRequestStartLabel(request.type)}
                       </button>
                     ) : null}
-                    {request.status !== 'done' ? (
-                      <button type="button" onClick={() => updateRequestStatus(request.id, 'done')}>
+                    {request.status === 'pending' ? (
+                      <span className="admin-action-hint">Fechamento liberado após atendimento.</span>
+                    ) : null}
+                    {request.status === 'in_progress' ? (
+                      <button
+                        className="complete-action"
+                        type="button"
+                        onClick={() => updateRequestStatus(request.id, 'done')}
+                      >
                         <Check size={16} aria-hidden="true" />
-                        Concluir
+                        {getRequestCompletionLabel(request.type)}
                       </button>
                     ) : null}
                     <button className="danger" type="button" onClick={() => removeRequest(request.id)}>
@@ -1057,6 +1165,7 @@ function CustomerMenu() {
   const [cart, setCart] = useState([])
   const [table, setTable] = useState(getInitialTable)
   const [note, setNote] = useState('')
+  const [paymentTiming, setPaymentTiming] = useState(PAYMENT_TIMING.AFTER)
   const [waiterRequested, setWaiterRequested] = useState(false)
   const [lastWaiterRequest, setLastWaiterRequest] = useState(null)
   const [cartOpen, setCartOpen] = useState(false)
@@ -1153,13 +1262,16 @@ function CustomerMenu() {
   const createServiceEvent = (type) => {
     const nowIso = new Date().toISOString()
     const tableLabel = formattedTable || 'não informada'
-    const items = cart.map((item) => ({
-      id: item.id,
-      name: item.name,
-      quantity: item.quantity,
-      categoryName: item.categoryName,
-      lineTotal: formatLineTotal(item),
-    }))
+    const items =
+      type === EVENT_TYPES.ORDER_CREATED
+        ? cart.map((item) => ({
+            id: item.id,
+            name: item.name,
+            quantity: item.quantity,
+            categoryName: item.categoryName,
+            lineTotal: formatLineTotal(item),
+          }))
+        : []
     const eventItemCount = items.reduce((sum, item) => sum + item.quantity, 0)
 
     return {
@@ -1172,7 +1284,11 @@ function CustomerMenu() {
       updatedAt: null,
       note: note.trim(),
       itemCount: eventItemCount,
-      total: hasPricedItems ? currency.format(cartTotal) : 'A confirmar',
+      total:
+        type === EVENT_TYPES.ORDER_CREATED && hasPricedItems
+          ? currency.format(cartTotal)
+          : 'A confirmar',
+      paymentTiming: type === EVENT_TYPES.ORDER_CREATED ? paymentTiming : PAYMENT_TIMING.AFTER,
       items,
     }
   }
@@ -1527,6 +1643,30 @@ function CustomerMenu() {
                 rows="4"
               />
             </label>
+
+            {isDineIn && cart.length ? (
+              <fieldset className="payment-timing">
+                <legend>Pagamento</legend>
+                <div className="payment-options">
+                  {Object.entries(PAYMENT_TIMING_META).map(([value, meta]) => (
+                    <label
+                      className={`payment-option ${paymentTiming === value ? 'active' : ''}`}
+                      key={value}
+                    >
+                      <input
+                        type="radio"
+                        name="paymentTiming"
+                        value={value}
+                        checked={paymentTiming === value}
+                        onChange={() => setPaymentTiming(value)}
+                      />
+                      <span>{meta.label}</span>
+                      <small>{meta.description}</small>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            ) : null}
 
             <div className="total-row">
               <span>Total</span>
