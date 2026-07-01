@@ -835,21 +835,129 @@
   cursor: not-allowed;
 }
 
-.service-note,
-.waiter-status {
+.service-note {
   margin: 0 0 12px;
   color: var(--muted);
   font-size: 0.88rem;
   line-height: 1.45;
 }
 
-.waiter-status {
-  margin: 12px 0 0;
-  padding: 10px 12px;
+.request-tracker {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0 0;
+  padding: 12px;
   border: 1px solid rgba(155, 199, 127, 0.28);
   border-radius: 8px;
-  color: #e8f7d6;
   background: rgba(69, 168, 109, 0.15);
+}
+
+.request-tracker.in_progress {
+  border-color: rgba(240, 189, 100, 0.36);
+  background: rgba(240, 189, 100, 0.12);
+}
+
+.request-tracker.done {
+  background: rgba(155, 199, 127, 0.12);
+}
+
+.request-tracker-head {
+  display: grid;
+  gap: 8px;
+}
+
+.request-tracker-head > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.request-table {
+  color: var(--rope);
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.request-tracker-head strong {
+  color: var(--paper);
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.request-tracker-head p,
+.request-timeline-step p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.request-timeline {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.request-timeline-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 9px;
+}
+
+.request-timeline-step:not(:last-child)::before {
+  position: absolute;
+  top: 25px;
+  bottom: -11px;
+  left: 10px;
+  width: 2px;
+  background: rgba(255, 250, 240, 0.14);
+  content: '';
+}
+
+.timeline-dot {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid rgba(255, 250, 240, 0.24);
+  border-radius: 999px;
+  color: #102016;
+  background: #222b26;
+}
+
+.request-timeline-step.complete .timeline-dot {
+  border-color: rgba(155, 199, 127, 0.66);
+  background: var(--sage);
+}
+
+.request-timeline-step.current .timeline-dot {
+  border-color: var(--rope);
+  box-shadow: 0 0 0 3px rgba(240, 189, 100, 0.14);
+}
+
+.request-timeline-step strong,
+.request-timeline-step small {
+  display: block;
+}
+
+.request-timeline-step strong {
+  color: var(--paper);
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+
+.request-timeline-step small {
+  margin: 3px 0 4px;
+  color: var(--rope);
+  font-size: 0.78rem;
+  font-weight: 900;
 }
 
 .cart-backdrop,
@@ -1248,8 +1356,23 @@
   line-height: 1.25;
 }
 
-.admin-status {
+.admin-status-stack {
+  display: grid;
   flex: 0 0 auto;
+  justify-items: end;
+  gap: 5px;
+  min-width: 150px;
+}
+
+.admin-status-stack small {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-align: right;
+}
+
+.admin-status {
   padding: 7px 9px;
   border-radius: 8px;
   color: #fffaf2;
@@ -1279,6 +1402,45 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.admin-progress-timeline {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-progress-timeline span {
+  display: grid;
+  gap: 5px;
+  min-height: 62px;
+  padding: 10px;
+  border: 1px solid rgba(155, 199, 127, 0.14);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(255, 250, 240, 0.04);
+  font-size: 0.78rem;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.admin-progress-timeline span.complete {
+  color: var(--paper);
+  border-color: rgba(155, 199, 127, 0.34);
+  background: rgba(69, 168, 109, 0.12);
+}
+
+.admin-progress-timeline span.current {
+  border-color: rgba(240, 189, 100, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(240, 189, 100, 0.12);
+}
+
+.admin-progress-timeline small {
+  color: inherit;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.25;
+  opacity: 0.78;
 }
 
 .admin-items {
@@ -1609,6 +1771,24 @@
 
   .admin-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-card-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-status-stack {
+    justify-items: start;
+    min-width: 0;
+  }
+
+  .admin-status-stack small {
+    text-align: left;
+  }
+
+  .admin-progress-timeline {
+    grid-template-columns: 1fr;
   }
 
   .category-tabs {

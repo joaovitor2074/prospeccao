@@ -47,10 +47,12 @@ const EVENT_TYPE_META = {
 }
 
 const STATUS_LABELS = {
-  pending: 'Pendente',
-  in_progress: 'Em atendimento',
-  done: 'Concluído',
+  pending: 'Recebido',
+  in_progress: 'Aprovado',
+  done: 'Finalizado',
 }
+
+const REQUEST_STATUS_FLOW = ['pending', 'in_progress', 'done']
 
 const PAYMENT_TIMING = {
   AFTER: 'after',
@@ -87,7 +89,7 @@ const store = {
   name: 'Primavera Sabor Codó',
   tagline: 'Pizzas, esfirras e espetinhos',
   hours: 'Segunda a sábado, 18:00 às 23:00',
-  dineInNotice: 'Cardápio digital da mesa. Monte seu resumo e chame o garçom.',
+  dineInNotice: 'Cardápio da mesa com acompanhamento da casa em tempo real.',
   deliveryNotice: 'Pedidos para delivery pelo WhatsApp.',
   address: 'Rua Nazeu Quadros, 06',
   phone: '(99) 98436-0319',
@@ -590,17 +592,17 @@ function getRequestPaymentLabel(request) {
 }
 
 function getRequestStartLabel(type) {
-  if (type === EVENT_TYPES.PAYMENT_REQUESTED) return 'Atender conta'
-  if (type === EVENT_TYPES.ORDER_CREATED) return 'Atender pedido'
+  if (type === EVENT_TYPES.PAYMENT_REQUESTED) return 'Preparar conta'
+  if (type === EVENT_TYPES.ORDER_CREATED) return 'Aprovar pedido'
 
-  return 'Atender chamado'
+  return 'Confirmar chamado'
 }
 
 function getRequestCompletionLabel(type) {
-  if (type === EVENT_TYPES.PAYMENT_REQUESTED) return 'Fechar conta'
-  if (type === EVENT_TYPES.ORDER_CREATED) return 'Fechar pedido'
+  if (type === EVENT_TYPES.PAYMENT_REQUESTED) return 'Finalizar conta'
+  if (type === EVENT_TYPES.ORDER_CREATED) return 'Marcar entregue'
 
-  return 'Concluir chamado'
+  return 'Concluir atendimento'
 }
 
 function getRequestEmptyNote(type) {
@@ -610,11 +612,232 @@ function getRequestEmptyNote(type) {
   return 'A mesa pediu apenas atendimento.'
 }
 
+function isValidDateValue(value) {
+  return Boolean(value) && !Number.isNaN(new Date(value).getTime())
+}
+
+function getSafeDateValue(value, fallback = null) {
+  return isValidDateValue(value) ? value : fallback
+}
+
+function buildRequestStatusHistory(request) {
+  const timestampsByStatus = new Map()
+
+  if (Array.isArray(request.statusHistory)) {
+    request.statusHistory.forEach((entry) => {
+      if (REQUEST_STATUS_FLOW.includes(entry?.status) && isValidDateValue(entry.at)) {
+        timestampsByStatus.set(entry.status, entry.at)
+      }
+    })
+  }
+
+  timestampsByStatus.set('pending', request.createdAt)
+
+  if (isValidDateValue(request.approvedAt)) {
+    timestampsByStatus.set('in_progress', request.approvedAt)
+  }
+
+  if (isValidDateValue(request.completedAt)) {
+    timestampsByStatus.set('done', request.completedAt)
+  }
+
+  return REQUEST_STATUS_FLOW.filter((status) => timestampsByStatus.has(status)).map((status) => ({
+    status,
+    at: timestampsByStatus.get(status),
+  }))
+}
+
+function applyRequestStatusUpdate(request, status, changedAt) {
+  const approvedAt =
+    request.approvedAt || (['in_progress', 'done'].includes(status) ? changedAt : null)
+  const completedAt = status === 'done' ? changedAt : request.completedAt || null
+  const nextRequest = {
+    ...request,
+    status,
+    updatedAt: changedAt,
+    approvedAt,
+    completedAt,
+  }
+
+  return {
+    ...nextRequest,
+    statusHistory: buildRequestStatusHistory(nextRequest),
+  }
+}
+
+function getRequestStatusTimestamp(request, status) {
+  const historyEntry = request.statusHistory?.find((entry) => entry.status === status)
+  const historyValue = getSafeDateValue(historyEntry?.at, null)
+
+  if (status === 'pending') return getSafeDateValue(request.createdAt, historyValue)
+  if (status === 'in_progress') return getSafeDateValue(request.approvedAt, historyValue)
+  if (status === 'done') return getSafeDateValue(request.completedAt, historyValue)
+
+  return historyValue
+}
+
+function getRequestTimelineMeta(type, status) {
+  if (status === 'pending') {
+    if (type === EVENT_TYPES.ORDER_CREATED) {
+      return {
+        label: 'Pedido enviado',
+        description: 'Sua escolha chegou ao painel da casa e será conferida pela equipe.',
+        timePrefix: 'Enviado',
+        waitingLabel: 'Aguardando envio',
+      }
+    }
+
+    if (type === EVENT_TYPES.PAYMENT_REQUESTED) {
+      return {
+        label: 'Conta solicitada',
+        description: 'A equipe recebeu o pedido de fechamento da mesa.',
+        timePrefix: 'Solicitada',
+        waitingLabel: 'Aguardando solicitação',
+      }
+    }
+
+    return {
+      label: 'Chamado enviado',
+      description: 'A equipe recebeu seu chamado pelo painel interno.',
+      timePrefix: 'Enviado',
+      waitingLabel: 'Aguardando chamado',
+    }
+  }
+
+  if (status === 'in_progress') {
+    if (type === EVENT_TYPES.ORDER_CREATED) {
+      return {
+        label: 'Pedido aprovado',
+        description: 'A cozinha e o salão já estão cuidando desta etapa da sua mesa.',
+        timePrefix: 'Aprovado',
+        waitingLabel: 'Aguardando aprovação da equipe',
+      }
+    }
+
+    if (type === EVENT_TYPES.PAYMENT_REQUESTED) {
+      return {
+        label: 'Conta em preparo',
+        description: 'A equipe está conferindo a mesa para levar o fechamento.',
+        timePrefix: 'Iniciada',
+        waitingLabel: 'Aguardando preparo da conta',
+      }
+    }
+
+    return {
+      label: 'Garçom a caminho',
+      description: 'Um atendente já foi avisado para ir até a sua mesa.',
+      timePrefix: 'Confirmado',
+      waitingLabel: 'Aguardando confirmação do garçom',
+    }
+  }
+
+  if (type === EVENT_TYPES.ORDER_CREATED) {
+    return {
+      label: 'Pedido entregue',
+      description: 'Esta etapa foi finalizada pela equipe da Primavera Sabor.',
+      timePrefix: 'Finalizado',
+      waitingLabel: 'Aguardando entrega',
+    }
+  }
+
+  if (type === EVENT_TYPES.PAYMENT_REQUESTED) {
+    return {
+      label: 'Conta fechada',
+      description: 'O fechamento da mesa foi concluído pela equipe.',
+      timePrefix: 'Finalizada',
+      waitingLabel: 'Aguardando fechamento',
+    }
+  }
+
+  return {
+    label: 'Atendimento concluído',
+    description: 'A equipe finalizou este chamado da mesa.',
+    timePrefix: 'Concluído',
+    waitingLabel: 'Aguardando conclusão',
+  }
+}
+
+function getRequestTimeline(request) {
+  const activeIndex = Math.max(REQUEST_STATUS_FLOW.indexOf(request.status), 0)
+
+  return REQUEST_STATUS_FLOW.map((status, index) => {
+    const meta = getRequestTimelineMeta(request.type, status)
+    const at = getRequestStatusTimestamp(request, status)
+
+    return {
+      ...meta,
+      status,
+      at,
+      isComplete: index < activeIndex || (index === activeIndex && Boolean(at)),
+      isCurrent: index === activeIndex,
+    }
+  })
+}
+
+function getTimelineTimeText(step) {
+  if (step.at) return `${step.timePrefix} às ${formatRequestTime(step.at)}`
+
+  return step.waitingLabel
+}
+
+function getRequestStatusLabel(request) {
+  return getRequestTimelineMeta(request.type, request.status).label || STATUS_LABELS[request.status]
+}
+
+function getRequestStatusDetail(request) {
+  const currentStep = getRequestTimeline(request).find((step) => step.status === request.status)
+
+  return currentStep ? getTimelineTimeText(currentStep) : STATUS_LABELS[request.status]
+}
+
+function getCustomerStatusMessage(request) {
+  const approvedAt = getRequestStatusTimestamp(request, 'in_progress')
+  const completedAt = getRequestStatusTimestamp(request, 'done')
+
+  if (request.status === 'pending') {
+    if (request.type === EVENT_TYPES.ORDER_CREATED) {
+      return 'Recebemos seu pedido na casa. Assim que a equipe aprovar, o horário aparece aqui.'
+    }
+
+    if (request.type === EVENT_TYPES.PAYMENT_REQUESTED) {
+      return 'A equipe já recebeu seu pedido de conta e vai preparar o fechamento da mesa.'
+    }
+
+    return 'Seu chamado chegou ao painel da equipe. Em instantes alguém confirma por aqui.'
+  }
+
+  if (request.status === 'in_progress') {
+    const timeText = approvedAt ? ` às ${formatRequestTime(approvedAt)}` : ''
+
+    if (request.type === EVENT_TYPES.ORDER_CREATED) {
+      return `Pedido aprovado${timeText}. A Primavera Sabor já está cuidando da sua mesa.`
+    }
+
+    if (request.type === EVENT_TYPES.PAYMENT_REQUESTED) {
+      return `Conta em preparo${timeText}. A equipe está conferindo tudo para levar até você.`
+    }
+
+    return `Chamado confirmado${timeText}. Um atendente está a caminho da sua mesa.`
+  }
+
+  const timeText = completedAt ? ` às ${formatRequestTime(completedAt)}` : ''
+
+  if (request.type === EVENT_TYPES.ORDER_CREATED) {
+    return `Pedido finalizado${timeText}. Obrigado por estar com a Primavera Sabor.`
+  }
+
+  if (request.type === EVENT_TYPES.PAYMENT_REQUESTED) {
+    return `Conta finalizada${timeText}. Obrigado pela visita.`
+  }
+
+  return `Atendimento concluído${timeText}. Sempre que precisar, chame a equipe pelo cardápio.`
+}
+
 function buildEventMessage(type, table, itemCount) {
   const tableLabel = table || 'não informada'
 
   if (type === EVENT_TYPES.ORDER_CREATED) {
-    return `Mesa ${tableLabel} enviou ${itemCount} ${itemCount === 1 ? 'item' : 'itens'} para atendimento`
+    return `Mesa ${tableLabel} enviou ${itemCount} ${itemCount === 1 ? 'item' : 'itens'} para aprovação da casa`
   }
 
   if (type === EVENT_TYPES.PAYMENT_REQUESTED) {
@@ -694,21 +917,39 @@ function readServiceRequests() {
         ? request.paymentTiming
         : PAYMENT_TIMING.AFTER
 
-      return {
+      const status = ['pending', 'in_progress', 'done'].includes(request.status)
+        ? request.status
+        : 'pending'
+      const createdAt = getSafeDateValue(request.createdAt, new Date().toISOString())
+      const updatedAt = getSafeDateValue(request.updatedAt, null)
+      const approvedAt = getSafeDateValue(
+        request.approvedAt,
+        ['in_progress', 'done'].includes(status) ? updatedAt || createdAt : null,
+      )
+      const completedAt = getSafeDateValue(
+        request.completedAt,
+        status === 'done' ? updatedAt || approvedAt || createdAt : null,
+      )
+      const normalizedRequest = {
         id: request.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         type,
         table,
         message: request.message || buildEventMessage(type, table, itemCount),
-        status: ['pending', 'in_progress', 'done'].includes(request.status)
-          ? request.status
-          : 'pending',
-        createdAt: request.createdAt || new Date().toISOString(),
-        updatedAt: request.updatedAt || null,
+        status,
+        createdAt,
+        updatedAt,
+        approvedAt,
+        completedAt,
         note: request.note || '',
         itemCount,
         total: type === EVENT_TYPES.ORDER_CREATED ? request.total || 'A confirmar' : 'A confirmar',
         paymentTiming,
         items,
+      }
+
+      return {
+        ...normalizedRequest,
+        statusHistory: buildRequestStatusHistory(normalizedRequest),
       }
     })
   } catch {
@@ -724,11 +965,15 @@ function writeServiceRequests(requests) {
 }
 
 function formatRequestTime(value) {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) return '--:--'
+
   return new Intl.DateTimeFormat('pt-BR', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-  }).format(new Date(value))
+  }).format(date)
 }
 
 function isAdminRoute() {
@@ -895,8 +1140,9 @@ function AdminPanel({ employee, onLogout }) {
   }
 
   const updateRequestStatus = (requestId, status) => {
+    const changedAt = new Date().toISOString()
     const nextRequests = readServiceRequests().map((request) =>
-      request.id === requestId ? { ...request, status, updatedAt: new Date().toISOString() } : request,
+      request.id === requestId ? applyRequestStatusUpdate(request, status, changedAt) : request,
     )
 
     writeServiceRequests(nextRequests)
@@ -976,7 +1222,7 @@ function AdminPanel({ employee, onLogout }) {
           <div>
             <span className="eyebrow">Painel interno</span>
             <h1>Atendimento das mesas</h1>
-            <p>Fila das chamadas, pedidos de mesa e solicitações de conta para a equipe resolver sem perder ritmo.</p>
+            <p>Fila das mesas com horários que aproximam o cliente da casa: recebido, aprovado e finalizado.</p>
           </div>
           <button
             className="action-button subtle"
@@ -996,7 +1242,7 @@ function AdminPanel({ employee, onLogout }) {
             <strong>{pendingCount}</strong>
           </div>
           <div>
-            <span>Em atendimento</span>
+            <span>Aprovados</span>
             <strong>{progressCount}</strong>
           </div>
           <div>
@@ -1041,7 +1287,7 @@ function AdminPanel({ employee, onLogout }) {
               {[
                 ['open', 'Abertos'],
                 ['pending', 'Pendentes'],
-                ['in_progress', 'Em atendimento'],
+                ['in_progress', 'Aprovados'],
                 ['done', 'Concluídos'],
                 ['all', 'Todos'],
               ].map(([value, label]) => (
@@ -1072,7 +1318,10 @@ function AdminPanel({ employee, onLogout }) {
                       <span className={`event-type ${eventMeta.tone}`}>{eventMeta.label}</span>
                       <strong>{request.message}</strong>
                     </div>
-                    <span className="admin-status">{STATUS_LABELS[request.status]}</span>
+                    <div className="admin-status-stack">
+                      <span className="admin-status">{getRequestStatusLabel(request)}</span>
+                      <small>{getRequestStatusDetail(request)}</small>
+                    </div>
                   </div>
 
                   <div className="admin-meta-row">
@@ -1092,6 +1341,26 @@ function AdminPanel({ employee, onLogout }) {
                         {paymentLabel}
                       </span>
                     ) : null}
+                    {request.approvedAt ? (
+                      <span>
+                        <Check size={16} aria-hidden="true" />
+                        Aprovado às {formatRequestTime(request.approvedAt)}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="admin-progress-timeline" aria-label="Linha do tempo da solicitação">
+                    {getRequestTimeline(request).map((step) => (
+                      <span
+                        className={`${step.isComplete ? 'complete' : ''} ${
+                          step.isCurrent ? 'current' : ''
+                        }`.trim()}
+                        key={step.status}
+                      >
+                        {step.label}
+                        <small>{getTimelineTimeText(step)}</small>
+                      </span>
+                    ))}
                   </div>
 
                   {request.type === EVENT_TYPES.ORDER_CREATED && request.items.length ? (
@@ -1126,7 +1395,7 @@ function AdminPanel({ employee, onLogout }) {
                       </button>
                     ) : null}
                     {request.status === 'pending' ? (
-                      <span className="admin-action-hint">Fechamento liberado após atendimento.</span>
+                      <span className="admin-action-hint">Finalização liberada após a aprovação.</span>
                     ) : null}
                     {request.status === 'in_progress' ? (
                       <button
@@ -1155,6 +1424,44 @@ function AdminPanel({ employee, onLogout }) {
         </section>
       </main>
     </div>
+  )
+}
+
+function RequestTracker({ request }) {
+  if (!request) return null
+
+  const eventMeta = getEventTypeMeta(request.type)
+  const timeline = getRequestTimeline(request)
+
+  return (
+    <section className={`request-tracker ${request.status}`} aria-live="polite">
+      <div className="request-tracker-head">
+        <div>
+          <span className={`event-type ${eventMeta.tone}`}>{eventMeta.label}</span>
+          <span className="request-table">Mesa {request.table}</span>
+        </div>
+        <strong>{getRequestStatusLabel(request)}</strong>
+        <p>{getCustomerStatusMessage(request)}</p>
+      </div>
+
+      <ol className="request-timeline" aria-label="Andamento da solicitação">
+        {timeline.map((step) => (
+          <li
+            className={`request-timeline-step ${step.isComplete ? 'complete' : ''} ${
+              step.isCurrent ? 'current' : ''
+            }`.trim()}
+            key={step.status}
+          >
+            <span className="timeline-dot">{step.isComplete ? <Check size={12} aria-hidden="true" /> : null}</span>
+            <div>
+              <strong>{step.label}</strong>
+              <small>{getTimelineTimeText(step)}</small>
+              <p>{step.description}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
   )
 }
 
@@ -1212,6 +1519,31 @@ function CustomerMenu() {
     return () => window.clearTimeout(timeoutId)
   }, [addNotice, recentlyAddedId])
 
+  useEffect(() => {
+    if (!lastWaiterRequest?.id) return undefined
+
+    const syncLastRequest = () => {
+      const currentRequest = readServiceRequests().find(
+        (request) => request.id === lastWaiterRequest.id,
+      )
+
+      if (currentRequest) {
+        setLastWaiterRequest(currentRequest)
+      }
+    }
+
+    window.addEventListener('storage', syncLastRequest)
+    window.addEventListener('service-requests-updated', syncLastRequest)
+    syncLastRequest()
+    const intervalId = window.setInterval(syncLastRequest, 3000)
+
+    return () => {
+      window.removeEventListener('storage', syncLastRequest)
+      window.removeEventListener('service-requests-updated', syncLastRequest)
+      window.clearInterval(intervalId)
+    }
+  }, [lastWaiterRequest?.id])
+
   const addToCart = (product) => {
     setCart((currentCart) => {
       const existingItem = currentCart.find((item) => item.id === product.id)
@@ -1253,10 +1585,12 @@ function CustomerMenu() {
   }, [cart, cartTotal, formattedTable, hasPricedItems, isDineIn, note])
 
   const pushServiceEvent = (request) => {
+    const eventMeta = getEventTypeMeta(request.type)
+
     writeServiceRequests([request, ...readServiceRequests()])
     setWaiterRequested(true)
     setLastWaiterRequest(request)
-    setAddNotice(`Solicitação enviada para a mesa ${request.table}.`)
+    setAddNotice(`${eventMeta.label} enviado. Acompanhe o andamento pela mesa ${request.table}.`)
   }
 
   const createServiceEvent = (type) => {
@@ -1274,7 +1608,7 @@ function CustomerMenu() {
         : []
     const eventItemCount = items.reduce((sum, item) => sum + item.quantity, 0)
 
-    return {
+    const request = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       type,
       table: tableLabel,
@@ -1282,6 +1616,8 @@ function CustomerMenu() {
       status: 'pending',
       createdAt: nowIso,
       updatedAt: null,
+      approvedAt: null,
+      completedAt: null,
       note: note.trim(),
       itemCount: eventItemCount,
       total:
@@ -1290,6 +1626,11 @@ function CustomerMenu() {
           : 'A confirmar',
       paymentTiming: type === EVENT_TYPES.ORDER_CREATED ? paymentTiming : PAYMENT_TIMING.AFTER,
       items,
+    }
+
+    return {
+      ...request,
+      statusHistory: buildRequestStatusHistory(request),
     }
   }
 
@@ -1676,7 +2017,7 @@ function CustomerMenu() {
             {isDineIn ? (
               <>
                 <p className="service-note">
-                  A equipe recebe sua solicitação no painel interno. Envie itens, tire dúvidas ou peça a conta.
+                  Envie o pedido, chame a equipe ou peça a conta. A casa confirma cada etapa e mostra o horário aqui.
                 </p>
                 <div className="service-actions">
                   <button className="checkout-button" type="button" onClick={handleWaiterCall}>
@@ -1708,11 +2049,7 @@ function CustomerMenu() {
                 Enviar pelo WhatsApp
               </a>
             )}
-            {waiterRequested && isDineIn ? (
-              <p className="waiter-status">
-                {lastWaiterRequest?.message || 'Solicitação enviada para a equipe.'}
-              </p>
-            ) : null}
+            {waiterRequested && isDineIn ? <RequestTracker request={lastWaiterRequest} /> : null}
           </aside>
         </section>
 
