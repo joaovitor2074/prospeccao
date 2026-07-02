@@ -547,6 +547,11 @@ const currency = new Intl.NumberFormat('pt-BR', {
   currency: 'BRL',
 })
 
+const tableCollator = new Intl.Collator('pt-BR', {
+  numeric: true,
+  sensitivity: 'base',
+})
+
 function getInitialTable() {
   if (typeof window === 'undefined') return ''
 
@@ -976,6 +981,65 @@ function formatRequestTime(value) {
   }).format(date)
 }
 
+function getRequestAgeMinutes(value) {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) return 0
+
+  return Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000))
+}
+
+function formatRequestAge(value) {
+  const minutes = getRequestAgeMinutes(value)
+
+  if (minutes < 1) return 'agora'
+  if (minutes < 60) return `${minutes} min`
+
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+
+  return remainingMinutes ? `${hours}h ${remainingMinutes}min` : `${hours}h`
+}
+
+function getRequestSearchText(request) {
+  const items = request.items?.map((item) => `${item.name} ${item.categoryName}`).join(' ') ?? ''
+
+  return `${request.table} ${request.message} ${request.note} ${items}`.toLocaleLowerCase('pt-BR')
+}
+
+function getRequestPriorityRank(request) {
+  if (request.status === 'pending') return 0
+  if (request.status === 'in_progress') return 1
+  if (request.status === 'done') return 3
+
+  return 2
+}
+
+function sortRequests(requests, sortMode) {
+  return [...requests].sort((firstRequest, secondRequest) => {
+    if (sortMode === 'newest') {
+      return new Date(secondRequest.createdAt).getTime() - new Date(firstRequest.createdAt).getTime()
+    }
+
+    if (sortMode === 'oldest') {
+      return new Date(firstRequest.createdAt).getTime() - new Date(secondRequest.createdAt).getTime()
+    }
+
+    if (sortMode === 'table') {
+      const tableComparison = tableCollator.compare(firstRequest.table, secondRequest.table)
+
+      if (tableComparison !== 0) return tableComparison
+    }
+
+    const priorityComparison =
+      getRequestPriorityRank(firstRequest) - getRequestPriorityRank(secondRequest)
+
+    if (priorityComparison !== 0) return priorityComparison
+
+    return new Date(firstRequest.createdAt).getTime() - new Date(secondRequest.createdAt).getTime()
+  })
+}
+
 function isAdminRoute() {
   if (typeof window === 'undefined') return false
 
@@ -1097,6 +1161,10 @@ function AdminPanel({ employee, onLogout }) {
   const [requests, setRequests] = useState(readServiceRequests)
   const [filter, setFilter] = useState('open')
   const [typeFilter, setTypeFilter] = useState('all')
+  const [tableFilter, setTableFilter] = useState('all')
+  const [searchTerm, setSearchTerm] = useState('')
+  const [sortMode, setSortMode] = useState('priority')
+  const [compactMode, setCompactMode] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(readSoundPreference)
   const knownRequestIdsRef = useRef(new Set(requests.map((request) => request.id)))
 
@@ -1139,6 +1207,10 @@ function AdminPanel({ employee, onLogout }) {
     })
   }
 
+  const refreshRequests = () => {
+    setRequests(readServiceRequests())
+  }
+
   const updateRequestStatus = (requestId, status) => {
     const changedAt = new Date().toISOString()
     const nextRequests = readServiceRequests().map((request) =>
@@ -1166,8 +1238,26 @@ function AdminPanel({ employee, onLogout }) {
   const doneCount = requests.filter((request) => request.status === 'done').length
   const orderCount = requests.filter((request) => request.type === EVENT_TYPES.ORDER_CREATED).length
   const paymentCount = requests.filter((request) => request.type === EVENT_TYPES.PAYMENT_REQUESTED).length
+  const activeTableSummaries = [...requests.reduce((tables, request) => {
+    if (request.status === 'done') return tables
 
-  const filteredRequests = requests.filter((request) => {
+    const currentTable = tables.get(request.table) ?? {
+      table: request.table,
+      total: 0,
+      pending: 0,
+    }
+
+    currentTable.total += 1
+    if (request.status === 'pending') currentTable.pending += 1
+    tables.set(request.table, currentTable)
+
+    return tables
+  }, new Map()).values()].sort((firstTable, secondTable) =>
+    tableCollator.compare(firstTable.table, secondTable.table),
+  )
+
+  const filteredRequests = sortRequests(requests.filter((request) => {
+    const query = searchTerm.trim().toLocaleLowerCase('pt-BR')
     const matchesStatus =
       filter === 'all' || (filter === 'open' ? request.status !== 'done' : request.status === filter)
     const matchesType =
@@ -1175,9 +1265,11 @@ function AdminPanel({ employee, onLogout }) {
       (typeFilter === 'orders' && request.type === EVENT_TYPES.ORDER_CREATED) ||
       (typeFilter === 'payments' && request.type === EVENT_TYPES.PAYMENT_REQUESTED) ||
       (typeFilter === 'service' && request.type === EVENT_TYPES.WAITER_CALL)
+    const matchesTable = tableFilter === 'all' || request.table === tableFilter
+    const matchesSearch = !query || getRequestSearchText(request).includes(query)
 
-    return matchesStatus && matchesType
-  })
+    return matchesStatus && matchesType && matchesTable && matchesSearch
+  }), sortMode)
 
   return (
     <div className="admin-shell">
@@ -1259,7 +1351,58 @@ function AdminPanel({ employee, onLogout }) {
             <span>Concluídos</span>
             <strong>{doneCount}</strong>
           </div>
+
         </section>
+
+        <label className="admin-search-field">
+          <Search size={18} aria-hidden="true" />
+          <input
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Buscar mesa, item ou observacao"
+            aria-label="Buscar solicitacoes"
+          />
+          {searchTerm ? (
+            <button
+              type="button"
+              onClick={() => setSearchTerm('')}
+              aria-label="Limpar busca"
+              title="Limpar busca"
+            >
+              <X size={15} aria-hidden="true" />
+            </button>
+          ) : null}
+        </label>
+
+        {activeTableSummaries.length || tableFilter !== 'all' ? (
+          <div className="admin-filter-group">
+            <span className="admin-filter-label">Mesas ativas</span>
+            <div className="admin-filters table-filters" aria-label="Mesas ativas">
+              <button
+                className={tableFilter === 'all' ? 'active' : ''}
+                type="button"
+                onClick={() => setTableFilter('all')}
+              >
+                Todas
+              </button>
+              {activeTableSummaries.map((summary) => (
+                <button
+                  className={tableFilter === summary.table ? 'active' : ''}
+                  type="button"
+                  key={summary.table}
+                  onClick={() => setTableFilter(summary.table)}
+                >
+                  Mesa {summary.table}
+                  <small>
+                    {summary.pending
+                      ? `${summary.pending} pendente${summary.pending === 1 ? '' : 's'}`
+                      : `${summary.total} aberto${summary.total === 1 ? '' : 's'}`}
+                  </small>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <section className="admin-filter-groups" aria-label="Filtros do painel">
           <div className="admin-filter-group">
@@ -1304,18 +1447,76 @@ function AdminPanel({ employee, onLogout }) {
               ))}
             </div>
           </div>
+
+          <div className="admin-filter-group">
+            <span className="admin-filter-label">Ordenar</span>
+            <div className="admin-filters" aria-label="Ordenacao da fila">
+              {[
+                ['priority', 'Prioridade'],
+                ['newest', 'Recentes'],
+                ['oldest', 'Antigos'],
+                ['table', 'Mesa'],
+              ].map(([value, label]) => (
+                <button
+                  className={sortMode === value ? 'active' : ''}
+                  type="button"
+                  key={value}
+                  onClick={() => setSortMode(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         </section>
 
           </div>
 
-          <section className="admin-list" aria-label="Solicitações">
+          <div className="admin-queue">
+            <div className="admin-list-toolbar">
+              <div>
+                <span className="eyebrow">Fila</span>
+                <strong>
+                  {filteredRequests.length}{' '}
+                  {filteredRequests.length === 1 ? 'solicitacao' : 'solicitacoes'}
+                </strong>
+                <small>{requests.length} registros no painel</small>
+              </div>
+              <div className="admin-toolbar-actions">
+                <button className="admin-utility-button" type="button" onClick={refreshRequests}>
+                  <Clock3 size={16} aria-hidden="true" />
+                  Atualizar
+                </button>
+                <button
+                  className={`admin-utility-button ${compactMode ? 'active' : ''}`}
+                  type="button"
+                  onClick={() => setCompactMode((currentValue) => !currentValue)}
+                  aria-pressed={compactMode}
+                >
+                  <Check size={16} aria-hidden="true" />
+                  Compacto
+                </button>
+              </div>
+            </div>
+
+          <section
+            className={`admin-list ${compactMode ? 'compact' : ''}`}
+            aria-label="Solicitações"
+          >
           {filteredRequests.length ? (
             filteredRequests.map((request) => {
               const eventMeta = getEventTypeMeta(request.type)
               const paymentLabel = getRequestPaymentLabel(request)
+              const requestAgeMinutes = getRequestAgeMinutes(request.createdAt)
+              const isRequestUrgent = request.status !== 'done' && requestAgeMinutes >= 10
 
               return (
-                <article className={`admin-card ${eventMeta.tone} ${request.status}`} key={request.id}>
+                <article
+                  className={`admin-card ${eventMeta.tone} ${request.status} ${
+                    isRequestUrgent ? 'urgent' : ''
+                  }`.trim()}
+                  key={request.id}
+                >
                   <div className="admin-card-head">
                     <div>
                       <span className="admin-table">Mesa {request.table}</span>
@@ -1332,6 +1533,9 @@ function AdminPanel({ employee, onLogout }) {
                     <span>
                       <Clock3 size={16} aria-hidden="true" />
                       {formatRequestTime(request.createdAt)}
+                    </span>
+                    <span className={`admin-age-badge ${isRequestUrgent ? 'urgent' : ''}`}>
+                      Espera {formatRequestAge(request.createdAt)}
                     </span>
                     {request.type === EVENT_TYPES.ORDER_CREATED ? (
                       <span>
@@ -1426,6 +1630,7 @@ function AdminPanel({ employee, onLogout }) {
             </div>
           )}
           </section>
+          </div>
         </section>
       </main>
     </div>

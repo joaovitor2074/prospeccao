@@ -1300,6 +1300,49 @@
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.2);
 }
 
+.admin-search-field {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 46px;
+  padding: 0 8px 0 12px;
+  border: 1px solid rgba(155, 199, 127, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 250, 240, 0.06);
+}
+
+.admin-search-field svg {
+  flex: 0 0 auto;
+  color: var(--rope);
+}
+
+.admin-search-field input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: var(--paper);
+  background: transparent;
+  font: inherit;
+}
+
+.admin-search-field input::placeholder {
+  color: rgba(255, 249, 239, 0.48);
+}
+
+.admin-search-field button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  color: var(--paper);
+  background: rgba(255, 249, 239, 0.1);
+  cursor: pointer;
+}
+
 .admin-filter-group {
   display: grid;
   gap: 8px;
@@ -1340,6 +1383,88 @@
   background: var(--orange);
 }
 
+.table-filters button {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  min-height: 48px;
+  line-height: 1.1;
+}
+
+.table-filters small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.table-filters button.active small {
+  color: rgba(255, 250, 240, 0.82);
+}
+
+.admin-queue {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.admin-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 14px;
+  border: 1px solid rgba(155, 199, 127, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 250, 240, 0.045);
+}
+
+.admin-list-toolbar strong,
+.admin-list-toolbar small {
+  display: block;
+}
+
+.admin-list-toolbar strong {
+  color: var(--paper);
+  font-size: 1.08rem;
+  line-height: 1.1;
+}
+
+.admin-list-toolbar small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.admin-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-utility-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgba(155, 199, 127, 0.18);
+  border-radius: 8px;
+  color: var(--paper);
+  background: rgba(255, 250, 240, 0.07);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.admin-utility-button.active {
+  color: #102016;
+  border-color: rgba(155, 199, 127, 0.54);
+  background: var(--sage);
+}
+
 .admin-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
@@ -1377,8 +1502,27 @@
     0 16px 36px var(--shadow);
 }
 
+.admin-card.urgent {
+  border-color: rgba(226, 88, 53, 0.46);
+  box-shadow:
+    0 0 0 1px rgba(226, 88, 53, 0.18),
+    0 16px 36px var(--shadow);
+}
+
 .admin-card.done {
   opacity: 0.78;
+}
+
+.admin-list.compact .admin-card {
+  gap: 10px;
+  padding: 14px;
+}
+
+.admin-list.compact .admin-progress-timeline,
+.admin-list.compact .admin-items,
+.admin-list.compact .admin-note,
+.admin-list.compact .admin-empty-note {
+  display: none;
 }
 
 .admin-card-head,
@@ -1482,6 +1626,19 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.admin-age-badge {
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 8px;
+  color: var(--paper);
+  background: rgba(255, 250, 240, 0.08);
+}
+
+.admin-age-badge.urgent {
+  color: #fffaf0;
+  background: rgba(226, 88, 53, 0.78);
 }
 
 .admin-progress-timeline {
@@ -1900,15 +2057,19 @@
   }
 
   .admin-hero {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 12px;
+    align-items: center;
+    flex-direction: row;
+    gap: 10px;
     margin-bottom: 14px;
-    padding: 16px;
+    padding: 12px;
+  }
+
+  .admin-hero .eyebrow {
+    display: none;
   }
 
   .admin-hero h1 {
-    font-size: 1.58rem;
+    font-size: 1.18rem;
   }
 
   .admin-hero p {
@@ -1923,16 +2084,24 @@
     display: contents;
   }
 
-  .admin-filter-groups {
+  .admin-search-field {
     order: 1;
   }
 
-  .admin-list {
+  .admin-controls > .admin-filter-group {
     order: 2;
   }
 
-  .admin-stats {
+  .admin-filter-groups {
     order: 3;
+  }
+
+  .admin-queue {
+    order: 4;
+  }
+
+  .admin-stats {
+    order: 5;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1942,6 +2111,19 @@
 
   .admin-filter-groups {
     padding: 12px;
+  }
+
+  .admin-list-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-toolbar-actions {
+    justify-content: stretch;
+  }
+
+  .admin-utility-button {
+    flex: 1;
   }
 
   .admin-filters {
