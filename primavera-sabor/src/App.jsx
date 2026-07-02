@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell,
   Camera,
@@ -1236,7 +1236,9 @@ function AdminPanel({ employee, onLogout }) {
           </button>
         </section>
 
-        <section className="admin-stats" aria-label="Resumo do atendimento">
+        <section className="admin-workspace">
+          <div className="admin-controls">
+            <section className="admin-stats" aria-label="Resumo do atendimento">
           <div>
             <span>Pendentes</span>
             <strong>{pendingCount}</strong>
@@ -1304,7 +1306,9 @@ function AdminPanel({ employee, onLogout }) {
           </div>
         </section>
 
-        <section className="admin-list" aria-label="Solicitações">
+          </div>
+
+          <section className="admin-list" aria-label="Solicitações">
           {filteredRequests.length ? (
             filteredRequests.map((request) => {
               const eventMeta = getEventTypeMeta(request.type)
@@ -1421,6 +1425,7 @@ function AdminPanel({ employee, onLogout }) {
               <strong>Nenhuma chamada nesse filtro</strong>
             </div>
           )}
+          </section>
         </section>
       </main>
     </div>
@@ -1478,6 +1483,7 @@ function CustomerMenu() {
   const [cartOpen, setCartOpen] = useState(false)
   const [recentlyAddedId, setRecentlyAddedId] = useState('')
   const [addNotice, setAddNotice] = useState('')
+  const shouldFocusStatusRef = useRef(false)
 
   const now = new Date()
   const day = now.getDay()
@@ -1507,6 +1513,13 @@ function CustomerMenu() {
   )
   const hasPricedItems = cart.some((item) => item.price != null)
   const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0)
+
+  const scrollToStatus = useCallback(() => {
+    document.getElementById('mesa-status')?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    })
+  }, [])
 
   useEffect(() => {
     if (!recentlyAddedId && !addNotice) return undefined
@@ -1543,6 +1556,13 @@ function CustomerMenu() {
       window.clearInterval(intervalId)
     }
   }, [lastWaiterRequest?.id])
+
+  useEffect(() => {
+    if (!shouldFocusStatusRef.current || !lastWaiterRequest?.id) return
+
+    shouldFocusStatusRef.current = false
+    window.requestAnimationFrame(scrollToStatus)
+  }, [lastWaiterRequest?.id, scrollToStatus])
 
   const addToCart = (product) => {
     setCart((currentCart) => {
@@ -1588,8 +1608,10 @@ function CustomerMenu() {
     const eventMeta = getEventTypeMeta(request.type)
 
     writeServiceRequests([request, ...readServiceRequests()])
+    shouldFocusStatusRef.current = true
     setWaiterRequested(true)
     setLastWaiterRequest(request)
+    setCartOpen(false)
     setAddNotice(`${eventMeta.label} enviado. Acompanhe o andamento pela mesa ${request.table}.`)
   }
 
@@ -1670,6 +1692,17 @@ function CustomerMenu() {
           >
             <Camera size={19} aria-hidden="true" />
           </a>
+          {waiterRequested && isDineIn ? (
+            <button
+              className="action-button subtle service-follow-button"
+              type="button"
+              onClick={scrollToStatus}
+              title="Ver andamento"
+            >
+              <Check size={18} aria-hidden="true" />
+              Acompanhar
+            </button>
+          ) : null}
           {isDineIn ? (
             <button className="action-button subtle" type="button" onClick={handleWaiterCall}>
               <Bell size={18} aria-hidden="true" />
@@ -1773,6 +1806,26 @@ function CustomerMenu() {
             </a>
           )}
         </section>
+
+        {waiterRequested && isDineIn ? (
+          <section className="customer-status-band" id="mesa-status" aria-label="Mensagens da mesa">
+            <div className="customer-status-heading">
+              <div>
+                <span className="eyebrow">Andamento</span>
+                <h2>Mensagens da mesa</h2>
+              </div>
+              <button
+                className="action-button subtle status-cart-button"
+                type="button"
+                onClick={() => setCartOpen(true)}
+              >
+                <ShoppingBag size={18} aria-hidden="true" />
+                Abrir resumo
+              </button>
+            </div>
+            <RequestTracker request={lastWaiterRequest} />
+          </section>
+        ) : null}
 
         <section className="workspace" id="cardapio">
           <div className="menu-panel">
@@ -2017,7 +2070,7 @@ function CustomerMenu() {
             {isDineIn ? (
               <>
                 <p className="service-note">
-                  Envie o pedido, chame a equipe ou peça a conta. A casa confirma cada etapa e mostra o horário aqui.
+                  Envie o pedido, chame a equipe ou solicite a conta. A casa confirma cada etapa no acompanhamento da mesa.
                 </p>
                 <div className="service-actions">
                   <button className="checkout-button" type="button" onClick={handleWaiterCall}>
@@ -2049,7 +2102,6 @@ function CustomerMenu() {
                 Enviar pelo WhatsApp
               </a>
             )}
-            {waiterRequested && isDineIn ? <RequestTracker request={lastWaiterRequest} /> : null}
           </aside>
         </section>
 
